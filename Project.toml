@@ -1,0 +1,8 @@
+name = "SAD"
+uuid = "f87dbf0a-7984-41c7-9dd8-de43c9b3a7ef"
+authors = ["Michel Schanen <mschanen@anl.gov>"]
+version = "0.1.0"
+
+[deps]
+ChainRules = "082447d4-558c-5d27-93f4-14fc19e9eca2"
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
