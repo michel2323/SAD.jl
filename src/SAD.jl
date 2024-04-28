@@ -24,13 +24,19 @@ Dual{Float64}(x::Bool) = Dual(x ? 1.0 : 0.0)
 struct Op
     partials::Tuple
     args::Tuple
-    output
 end
 
 mutable struct TapeContext
     opstack::Vector{Op}
     idx::Int
     TapeContext() = new(Op[], 1)
+end
+
+function Base.show(io::IO, ctx::TapeContext)
+    println("Partials, Args, Output")
+    for op in ctx.opstack
+        println(io, "$(op.partials)\t, $(op.args)")
+    end
 end
 
 const ACTIVE_CONTEXT = Ref{Union{Nothing, TapeContext}}(nothing)
@@ -55,8 +61,10 @@ for op in SAD_FUNCTIONS
                     y = Dual($op(values...))
                     g = rrule($op, values...)
                     partials = g[2](1.0)[2:end]
-                    op = Op(partials, idxs, y.val)
+                    op = Op(partials, idxs)
                     push!(ctx.opstack, op)
+                    y.idx = ctx.idx
+                    ctx.idx += 1
                     return y
                 else
                     # return Dual($op(a.val, b.val))
@@ -71,11 +79,11 @@ function register(x::Real)
     ctx = current_context()
     dx = Dual(x)
     y = Dual(dx.val)
-    y.idx = ctx.idx
     g = rrule(identity, dx.val)
     partials = g[2](1.0)[2:end]
-    op = Op(partials, (dx.idx,), y.val)
+    op = Op(partials, (dx.idx,))
     push!(ctx.opstack, op)
+    y.idx = ctx.idx
     ctx.idx += 1
     return y
 end
@@ -85,7 +93,7 @@ function register(x::Dual)
     y = Dual(x.val)
     g = rrule(identity, x.val)
     partials = g[2](1.0)[2:end]
-    op = Op(partials, (x.idx,), y.val)
+    op = Op(partials, (x.idx,))
     push!(ctx.opstack, op)
     y.idx = ctx.idx
     ctx.idx += 1
@@ -96,11 +104,11 @@ function get_tangent(x::Dual, tape::Vector{Float64})
     return tape[x.idx]
 end
 
-function interpret(ctx::TapeContext)
+function interpret(ctx::TapeContext, dy::Dual)
     nops = length(ctx.opstack)
-    values_tape = zeros(ctx.idx-1)
-    values_tape[end] = 1.0
-    for idx in reverse(1:ctx.idx-1)
+    adjoint_tape = zeros(ctx.idx-1)
+    adjoint_tape[dy.idx] = 1.0
+    for idx in reverse(1:nops)
         partials = ctx.opstack[idx].partials
         args = ctx.opstack[idx].args
         for i in eachindex(args)
@@ -108,10 +116,10 @@ function interpret(ctx::TapeContext)
                 continue
             end
             partial = partials[i]
-            values_tape[args[i]] += partial*values_tape[idx]
+            adjoint_tape[args[i]] += partial*adjoint_tape[idx]
         end
     end
-    return values_tape
+    return adjoint_tape
 end
 
 end # module SAD
