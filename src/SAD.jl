@@ -1,14 +1,25 @@
 module SAD
+using LinearAlgebra
 export start_context, end_context, current_context
 export register, get_tangent, interpret
 export Dual
+include("functions.jl")
+export SAD_FUNCTIONS
 mutable struct Dual{T} <: Real where {T <: Real}
     val::T
-    idx::Int
+    idx::UInt64
     function Dual(val::T) where {T <: Real}
         return new{T}(val, 0)
     end
 end
+
+Base.zero(::Type{<:Dual}) = Dual(0.0)
+Base.iszero(x::Dual) = x.val == 0.0
+Base.one(::Type{<:Dual}) = Dual(1.0)
+Base.isfinite(x::Dual) = isfinite(x.val)
+Base.:<(x::Dual, y::Dual) = x.val < y.val
+Base.:>(x::Dual, y::Dual) = x.val > y.val
+Dual{Float64}(x::Bool) = Dual(x ? 1.0 : 0.0)
 
 struct Op
     partials::Tuple
@@ -33,21 +44,24 @@ import Base: +, *
 using ChainRules
 import ChainRules: rrule
 
-for op in (:+, :*)
-    @eval begin
-        function $op(a::Dual, b::Dual)
-            ctx = current_context()
-            if ctx !== nothing
-                y = Dual($op(a.val, b.val))
-                g = rrule($op, a.val, b.val)
-                partials = g[2](1.0)[2:end]
-                op = Op(partials, (a.idx, b.idx), y.val)
-                push!(ctx.opstack, op)
-                y.idx = ctx.idx
-                ctx.idx += 1
-                return y
-            else
-                return Dual($op(a.val, b.val))
+for op in SAD_FUNCTIONS
+    for T in (Dual,)
+        @eval begin
+            function $op(args::Vararg{$T,N}) where {N}
+                values = getfield.(args, :val)
+                ctx = current_context()
+                if ctx !== nothing
+                    idxs = getfield.(args, :idx)
+                    y = Dual($op(values...))
+                    g = rrule($op, values...)
+                    partials = g[2](1.0)[2:end]
+                    op = Op(partials, idxs, y.val)
+                    push!(ctx.opstack, op)
+                    return y
+                else
+                    # return Dual($op(a.val, b.val))
+                    return Dual($op(values))
+                end
             end
         end
     end
@@ -73,7 +87,6 @@ function register(x::Dual)
     partials = g[2](1.0)[2:end]
     op = Op(partials, (x.idx,), y.val)
     push!(ctx.opstack, op)
-    @show ctx.idx
     y.idx = ctx.idx
     ctx.idx += 1
     return y
