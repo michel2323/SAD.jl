@@ -28,20 +28,25 @@ end
 
 mutable struct TapeContext
     opstack::Vector{Op}
-    idx::Int
-    TapeContext() = new(Op[], 1)
+    idx::UInt64
+    function TapeContext(n::UInt64)
+        opstack = Vector{Op}(undef, n)
+        sizehint!(opstack, n)
+        return new(opstack, 1)
+    end
 end
 
 function Base.show(io::IO, ctx::TapeContext)
-    println("Partials, Args, Output")
-    for op in ctx.opstack
-        println(io, "$(op.partials)\t, $(op.args)")
+    println("Partials, Args")
+    opstack = ctx.opstack
+    for i in 1:ctx.idx-1
+        println(io, "$(opstack[i].partials)\t, $(opstack[i].args)")
     end
 end
 
 const ACTIVE_CONTEXT = Ref{Union{Nothing, TapeContext}}(nothing)
 
-start_context() = (ACTIVE_CONTEXT[] = TapeContext())
+start_context(n::UInt64) = (ACTIVE_CONTEXT[] = TapeContext(n))
 end_context() = (ctx = ACTIVE_CONTEXT[]; ACTIVE_CONTEXT[] = nothing; ctx)
 current_context() = ACTIVE_CONTEXT[]
 
@@ -54,21 +59,22 @@ for op in SAD_FUNCTIONS
     for T in (Dual,)
         @eval begin
             function $op(args::Vararg{$T,N}) where {N}
-                values = getfield.(args, :val)
-                ctx = current_context()
-                if ctx !== nothing
-                    idxs = getfield.(args, :idx)
-                    y = Dual($op(values...))
-                    g = rrule($op, values...)
-                    partials = g[2](1.0)[2:end]
-                    op = Op(partials, idxs)
-                    push!(ctx.opstack, op)
-                    y.idx = ctx.idx
-                    ctx.idx += 1
-                    return y
-                else
-                    # return Dual($op(a.val, b.val))
-                    return Dual($op(values))
+                @inbounds begin
+                    values = getfield.(args, :val)
+                    ctx = current_context()
+                    if ctx !== nothing
+                        idxs = getfield.(args, :idx)
+                        y = Dual($op(values...))
+                        g = rrule($op, values...)
+                        partials = g[2](1.0)[2:end]
+                        op = Op(partials, idxs)
+                        ctx.opstack[ctx.idx] = op
+                        y.idx = ctx.idx
+                        ctx.idx += 1
+                        return y
+                    else
+                        return Dual($op(values...))
+                    end
                 end
             end
         end
@@ -82,7 +88,7 @@ function register(x::Real)
     g = rrule(identity, dx.val)
     partials = g[2](1.0)[2:end]
     op = Op(partials, (dx.idx,))
-    push!(ctx.opstack, op)
+    ctx.opstack[ctx.idx] = op
     y.idx = ctx.idx
     ctx.idx += 1
     return y
@@ -94,7 +100,7 @@ function register(x::Dual)
     g = rrule(identity, x.val)
     partials = g[2](1.0)[2:end]
     op = Op(partials, (x.idx,))
-    push!(ctx.opstack, op)
+    ctx.opstack[ctx.idx] = op
     y.idx = ctx.idx
     ctx.idx += 1
     return y
@@ -104,11 +110,13 @@ function get_tangent(x::Dual, tape::Vector{Float64})
     return tape[x.idx]
 end
 
-function interpret(ctx::TapeContext, dy::Dual)
+function interpret(ctx::TapeContext, dependents::Dual...)
     nops = length(ctx.opstack)
     adjoint_tape = zeros(ctx.idx-1)
-    adjoint_tape[dy.idx] = 1.0
-    for idx in reverse(1:nops)
+    for dependent in dependents
+        adjoint_tape[dependent.idx] = 1.0
+    end
+    for idx in reverse(1:ctx.idx-1)
         partials = ctx.opstack[idx].partials
         args = ctx.opstack[idx].args
         for i in eachindex(args)

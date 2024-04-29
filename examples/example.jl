@@ -5,7 +5,7 @@ function f(x,y)
     return z
 end
 
-start_context()  # Start tracking operations
+start_context(UInt64(2000000))  # Start tracking operations
 x = register(3.0)
 y = register(2.0)
 z = f(x,y)
@@ -16,7 +16,7 @@ tape = interpret(ctx,dz);  # Assuming the seed gradient of the output is 1
 @show dy = get_tangent(y,tape)
 
 # Testing inv(A)
-start_context()  # Start tracking operations
+start_context(UInt64(2000000))  # Start tracking operations
 A = rand(2, 2)
 dA = register.(A)
 dinvA = inv(dA)
